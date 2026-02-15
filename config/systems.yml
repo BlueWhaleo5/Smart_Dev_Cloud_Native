@@ -1,0 +1,699 @@
+# ====================================================================
+# Smart Dev-Docs Platform - Kubernetes Infrastructure Manifest
+# Phiên bản: Tối ưu cho Minikube 4GB RAM, Kafka KRaft (Bitnami),
+#            Iceberg local, Ollama CPU, Spark Streaming
+# ====================================================================
+
+---
+# --------------------------------------------------------------------
+# 1. NAMESPACES
+# --------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka-kraft
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: postgres
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hive
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spark
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ollama
+
+---
+# --------------------------------------------------------------------
+# 2. STORAGECLASS (Minikube)
+# --------------------------------------------------------------------
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+provisioner: k8s.io/minikube-hostpath
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+
+---
+# ====================================================================
+# 3. KAFKA (KRaft mode, Bitnami image – pull ổn định)
+# ====================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-service
+  namespace: kafka-kraft
+  labels:
+    app: kafka
+spec:
+  type: ClusterIP
+  ports:
+    - name: broker
+      port: 9092
+      protocol: TCP
+      targetPort: 9092
+  selector:
+    app: kafka
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: kafka-kraft
+spec:
+  selector:
+    matchLabels:
+      app: kafka
+  serviceName: kafka-service
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.5.0
+          ports:
+            - containerPort: 9092
+          env:
+            - name: CLUSTER_ID
+              value: "QwjfU6MPQ_CMdFsbCx7EGg"
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@localhost:9093"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka-service.kafka-kraft:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_LOG_DIRS
+              value: "/var/lib/kafka/data"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "8"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+          volumeMounts:
+            - name: kafka-storage
+              mountPath: /var/lib/kafka/data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+# ====================================================================
+# 4. POSTGRESQL – Metadata cho Hive Metastore
+# ====================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: postgres
+stringData:
+  POSTGRES_DB: metastore
+  POSTGRES_USER: hive
+  POSTGRES_PASSWORD: hivepass
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: postgres
+spec:
+  storageClassName: standard
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi      # Giảm từ 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "100m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: postgres
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
+
+---
+# ====================================================================
+# 5. ICEBERG WAREHOUSE PVC (dùng chung cho Hive & Spark)
+# ====================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iceberg-warehouse-pvc
+  namespace: hive
+spec:
+  storageClassName: standard
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi      # Giảm từ 10Gi
+
+---
+# ====================================================================
+# 6. HIVE METASTORE (Iceberg Catalog) – FIXED for alexcpn/hivemetastore
+# ====================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metastore-config
+  namespace: hive
+data:
+  metastore-site.xml: |
+    <?xml version="1.0"?>
+    <configuration>
+      <property>
+        <name>metastore.thrift.uris</name>
+        <value>thrift://0.0.0.0:9083</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>org.postgresql.Driver</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:postgresql://postgres-service.postgres:5432/metastore</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionUserName</name>
+        <value>hive</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionPassword</name>
+        <value>hivepass</value>
+      </property>
+      <property>
+        <name>metastore.warehouse.dir</name>
+        <value>file:///opt/iceberg/warehouse</value>
+      </property>
+      <property>
+        <name>datanucleus.schema.autoCreateAll</name>
+        <value>true</value>
+      </property>
+      <property>
+        <name>hive.metastore.schema.verification</name>
+        <value>false</value>
+      </property>
+    </configuration>
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hive-schema-init
+  namespace: hive
+spec:
+  template:
+    spec:
+      initContainers:
+      - name: wait-postgres
+        image: busybox:1.36
+        command: ['sh', '-c', 'until nc -z postgres-service.postgres 5432; do echo "Waiting for PostgreSQL..."; sleep 2; done; sleep 5']
+      containers:
+      - name: schematool
+        image: alexcpn/hivemetastore:3.1.3.5
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "Initializing Hive schema on PostgreSQL..."
+            # Tìm đường dẫn schematool
+            SCHEMATOOL_PATH=$(find / -name schematool -type f 2>/dev/null | head -1)
+            if [ -n "$SCHEMATOOL_PATH" ]; then
+              echo "Found schematool at: $SCHEMATOOL_PATH"
+              # Force dùng PostgreSQL connection params
+              $SCHEMATOOL_PATH \
+                -dbType postgres \
+                -initSchema \
+                -userName hive \
+                -passWord hivepass \
+                -url jdbc:postgresql://postgres-service.postgres:5432/metastore \
+                -driver org.postgresql.Driver \
+                -verbose
+            else
+              echo "Schematool not found!"
+              exit 1
+            fi
+        volumeMounts:
+          - name: config
+            mountPath: /opt/hive/conf/metastore-site.xml
+            subPath: metastore-site.xml
+        env:
+          - name: HIVE_CONF_DIR
+            value: "/opt/hive/conf"
+      restartPolicy: Never
+      volumes:
+        - name: config
+          configMap:
+            name: metastore-config
+  backoffLimit: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metastore
+  namespace: hive
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metastore
+  template:
+    metadata:
+      labels:
+        app: metastore
+    spec:
+      initContainers:
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z postgres-service.postgres 5432; do echo "Waiting for PostgreSQL..."; sleep 2; done; sleep 5']
+        - name: init-warehouse
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mkdir -p /opt/iceberg/warehouse
+              chmod 777 /opt/iceberg/warehouse
+          volumeMounts:
+            - name: warehouse
+              mountPath: /opt/iceberg/warehouse
+      containers:
+        - name: metastore
+          image: alexcpn/hivemetastore:3.1.3.5
+          command: ["/opt/apache-hive-metastore-3.1.3-bin/bin/start-metastore"]  # Đường dẫn đúng
+          ports:
+            - containerPort: 9083
+          env:
+            - name: HADOOP_HEAPSIZE
+              value: "512"
+            - name: HIVE_CONF_DIR
+              value: "/opt/apache-hive-metastore-3.1.3-bin/conf"  # Thay đổi đường dẫn conf
+            - name: javax.jdo.option.ConnectionURL
+              value: "jdbc:postgresql://postgres-service.postgres:5432/metastore"
+            - name: javax.jdo.option.ConnectionDriverName
+              value: "org.postgresql.Driver"
+            - name: javax.jdo.option.ConnectionUserName
+              value: "hive"
+            - name: javax.jdo.option.ConnectionPassword
+              value: "hivepass"
+          volumeMounts:
+            - name: config
+              mountPath: /opt/apache-hive-metastore-3.1.3-bin/conf/metastore-site.xml  # Thay đổi mount path
+              subPath: metastore-site.xml
+            - name: warehouse
+              mountPath: /opt/iceberg/warehouse
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "300m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: config
+          configMap:
+            name: metastore-config
+        - name: warehouse
+          persistentVolumeClaim:
+            claimName: iceberg-warehouse-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metastore-service
+  namespace: hive
+spec:
+  ports:
+    - port: 9083
+      targetPort: 9083
+  selector:
+    app: metastore
+---
+# ====================================================================
+# 7. OLLAMA – CPU Mode, pull models sau 30s
+# ====================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: ollama
+spec:
+  storageClassName: standard
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi       # Giảm từ 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.1.44
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0"
+            - name: OLLAMA_KEEP_ALIVE
+              value: "24h"
+            - name: OLLAMA_NUM_PARALLEL
+              value: "1"
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: ollama
+spec:
+  ports:
+    - port: 11434
+      targetPort: 11434
+  selector:
+    app: ollama
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-pull-models
+  namespace: ollama
+spec:
+  template:
+    spec:
+      containers:
+      - name: puller
+        image: ollama/ollama:0.1.44
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "⏳ Waiting for Ollama to be ready..."
+            until ollama list &>/dev/null; do
+              echo "Ollama not ready, retrying in 5s..."
+              sleep 5
+            done
+            echo "✅ Ollama is ready!"
+            
+            echo "📥 Pulling nomic-embed-text..."
+            ollama pull nomic-embed-text
+            
+            echo "📥 Pulling mistral:7b-instruct..."
+            ollama pull mistral:7b-instruct
+            
+            echo "✅ All models pulled successfully!"
+            ollama list
+        volumeMounts:
+        - name: models
+          mountPath: /root/.ollama
+      restartPolicy: Never
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: ollama-models-pvc
+  backoffLimit: 3
+
+---
+# ====================================================================
+# 8. SPARK STREAMING với ICEBERG (Kafka -> Iceberg)
+# ====================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-scripts
+  namespace: spark
+data:
+  stream.py: |
+    from pyspark.sql import SparkSession
+    from pyspark.sql.functions import from_json, col
+    from pyspark.sql.types import StructType, StructField, StringType, LongType
+    import time
+
+    print("Starting Spark Streaming...")
+    time.sleep(10)
+
+    spark = SparkSession.builder \
+        .appName("SmartDevDocs-Iceberg") \
+        .master("local[1]") \
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+        .config("spark.sql.catalog.hive_prod", "org.apache.iceberg.spark.SparkCatalog") \
+        .config("spark.sql.catalog.hive_prod.type", "hive") \
+        .config("spark.sql.catalog.hive_prod.uri", "thrift://metastore-service.hive:9083") \
+        .config("spark.sql.catalog.hive_prod.warehouse", "file:///opt/iceberg/warehouse") \
+        .config("spark.sql.streaming.schemaInference", "true") \
+        .config("spark.sql.adaptive.enabled", "false") \
+        .getOrCreate()
+
+    spark.sparkContext.setLogLevel("WARN")
+
+    # Create database if not exists
+    spark.sql("CREATE DATABASE IF NOT EXISTS hive_prod.db")
+    print("Database hive_prod.db created/verified")
+
+    schema = StructType([
+        StructField("doc_id", StringType()),
+        StructField("chunk_id", StringType()),
+        StructField("content", StringType()),
+        StructField("timestamp", LongType())
+    ])
+
+    df = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "kafka-service.kafka-kraft:9092") \
+        .option("subscribe", "document-events") \
+        .option("startingOffsets", "latest") \
+        .option("failOnDataLoss", "false") \
+        .load()
+
+    parsed = df.select(
+        from_json(col("value").cast("string"), schema).alias("data")
+    ).select("data.*")
+
+    spark.sql("""
+        CREATE TABLE IF NOT EXISTS hive_prod.db.doc_chunks (
+            doc_id STRING,
+            chunk_id STRING,
+            content STRING,
+            timestamp LONG
+        ) USING iceberg
+        LOCATION 'file:///opt/iceberg/warehouse/db/doc_chunks'
+    """)
+
+    query = parsed.writeStream \
+        .format("iceberg") \
+        .outputMode("append") \
+        .option("path", "hive_prod.db.doc_chunks") \
+        .option("checkpointLocation", "file:///opt/iceberg/warehouse/checkpoints/doc_chunks") \
+        .trigger(processingTime="30 seconds") \
+        .start()
+
+    print("Streaming is running. Waiting for data...")
+    query.awaitTermination()
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: iceberg-warehouse-pvc
+  namespace: spark
+spec:
+  storageClassName: standard
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-streaming
+  namespace: spark
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-streaming
+  template:
+    metadata:
+      labels:
+        app: spark-streaming
+    spec:
+      initContainers:
+        - name: wait-kafka
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Waiting for Kafka at kafka-service.kafka-kraft:9092..."
+              while ! nc -z kafka-service.kafka-kraft 9092; do
+                echo "Kafka not ready, retrying in 3 seconds..."
+                sleep 3
+              done
+              echo "Kafka is ready! Continuing..."
+        - name: wait-metastore
+          image: busybox:1.36
+          command: ['sh', '-c', 'until nc -z metastore-service.hive 9083; do echo "Waiting for Metastore..."; sleep 3; done']
+        - name: init-warehouse
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mkdir -p /opt/iceberg/warehouse
+              chmod 777 /opt/iceberg/warehouse
+          volumeMounts:
+            - name: warehouse
+              mountPath: /opt/iceberg/warehouse
+      containers:
+        - name: spark
+          image: apache/spark:3.5.7-python3
+          command:
+            - /bin/bash
+            - -c
+            - |
+              mkdir -p /tmp/.ivy2
+              export SPARK_HOME=/opt/spark
+              export IVY_CACHE_DIR=/tmp/.ivy2
+              export _JAVA_OPTIONS="-Djava.io.tmpdir=/tmp -Divy.cache.dir=/tmp/.ivy2 -Divy.home=/tmp/.ivy2"
+              cd /tmp
+              
+              echo "Installing dependencies to /tmp/.ivy2..."
+              
+              $$SPARK_HOME/bin/spark-submit \
+                --master local[1] \
+                --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.5.0 \
+                --conf spark.sql.catalog.hive_prod=org.apache.iceberg.spark.SparkCatalog \
+                --conf spark.sql.catalog.hive_prod.type=hive \
+                --conf spark.sql.catalog.hive_prod.uri=thrift://metastore-service.hive:9083 \
+                --conf spark.sql.catalog.hive_prod.warehouse=/opt/iceberg/warehouse \
+                --conf spark.jars.ivy=/tmp/.ivy2 \
+                --conf spark.local.dir=/tmp \
+                --driver-memory 512m \
+                /opt/scripts/stream.py
+          volumeMounts:
+            - name: scripts
+              mountPath: /opt/scripts
+            - name: warehouse
+              mountPath: /opt/iceberg/warehouse
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "400m"
+      volumes:
+        - name: scripts
+          configMap:
+            name: spark-scripts
+        - name: warehouse
+          persistentVolumeClaim:
+            claimName: iceberg-warehouse-pvc
