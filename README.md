@@ -123,7 +123,6 @@ bash ./k8s/build.sh ui
 ```
 
 Mở Streamlit tại địa chỉ: **http://localhost:8501**  
-Mở Grafana tại địa chỉ: **http://localhost:3000** (admin/admin)
 
 ### Gỡ Cài Đặt
 ```bash
