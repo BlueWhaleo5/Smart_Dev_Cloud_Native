@@ -37,6 +37,18 @@ docker pull alexcpn/hivemetastore:3.1.3.5
 ```
 để xem tiến độ pull
 
+**Kết quả mong đợi:**
+```
+NAMESPACE     NAME                                      READY   STATUS
+hive          metastore-xxx                             1/1     Running
+kafka-kraft   kafka-0                                   1/1     Running
+minio         minio-xxx                                 1/1     Running
+ollama        ollama-xxx                                1/1     Running
+postgres      postgres-xxx                              1/1     Running
+qdrant        qdrant-xxx                                1/1     Running
+spark         spark-streaming-xxx                       1/1     Running
+```
+
 
 ### Theo dõi pods cho đến khi Running:
 ```powershell
