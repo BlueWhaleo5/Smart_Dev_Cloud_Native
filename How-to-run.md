@@ -82,7 +82,7 @@ bash ./k8s/build.sh pipeline --skip-upload
 bash ./k8s/build.sh crawl
 ```
 
-Lấy bài mới từ dev.to, InfoQ, Medium, The New Stack. Bài đã index sẽ bị bỏ qua.
+Lấy bài mới từ dev.to, reddit, github. Bài đã index sẽ bị bỏ qua.
 
 ---
 
