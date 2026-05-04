@@ -23,8 +23,8 @@
 | **Lưu trữ Cấu trúc** | Iceberg + Hive (Postgres) | `hive` / `postgres`| Lưu trữ ACID và quản lý Schema (Data Lakehouse) |
 | **Lưu trữ Ngữ nghĩa** | Qdrant | `qdrant` | Vector DB lưu trữ Embeddings cho tìm kiếm Semantic |
 | **Lưu trữ Object** | MinIO | `minio` | S3-compatible storage lưu trữ các file PDF thô |
-| **Bộ não AI (Local)**| Ollama (`mistral`, `nomic`) | `ollama` | Sinh Embeddings & Local Inference (100% Offline) |
-| **Bộ não AI (Cloud)**| Groq API (Llama-3.3)| - | Tối ưu hóa truy vấn siêu tốc (Alternative) |
+| **AI (Local)**| Ollama (`mistral`, `nomic`) | `ollama` | Sinh Embeddings & Local Inference (100% Offline) |
+| **AI (Cloud)**| Groq API (Llama-3.3)| - | Tối ưu hóa truy vấn siêu tốc (Alternative) |
 | **Giao diện người dùng** | Streamlit | `streamlit` | Giao diện Web để tương tác với hệ thống |
 
 ---
@@ -52,15 +52,15 @@ graph LR
 
 ### 1. Xử lý Tài liệu Đa phương tiện
 Để đảm bảo chất lượng phản hồi cao nhất, hệ thống không chỉ đọc văn bản thô mà còn xử lý các thành phần phức tạp trong tài liệu kỹ thuật:
-- **Xử lý PDF đa phương tiện (Multimodal PDF):** Sử dụng thư viện `unstructured` để trích xuất văn bản và hình ảnh từ file PDF. Sau đó, sử dụng mô hình thị giác máy tính **LLaVa** (chạy qua Ollama) để "nhìn" hình ảnh và sinh ra một đoạn mô tả kỹ thuật (Technical Description) tóm tắt nội dung hình ảnh đó. Đoạn text này sau đó được gắn kèm vào ngữ cảnh của trang tài liệu
+- **Xử lý PDF đa phương tiện:** Sử dụng thư viện `unstructured` để trích xuất văn bản và hình ảnh từ file PDF. Sau đó, sử dụng mô hình thị giác máy tính **LLaVa** (chạy qua Ollama) để "nhìn" hình ảnh và sinh ra một đoạn mô tả kỹ thuật tóm tắt nội dung hình ảnh đó. Đoạn text này sau đó được gắn kèm vào ngữ cảnh của trang tài liệu
 - **Trích xuất Bảng (Tables):** Sử dụng thư viện `pdfplumber` để nhận diện các bảng biểu, sau đó tự động chuyển đổi chúng về định dạng **Markdown**. Việc này giúp giữ nguyên cấu trúc hàng/cột, cho phép LLM hiểu được các so sánh và dữ liệu thống kê chính xác hơn so với việc đọc text rời rạc
-- **Phân đoạn thông minh (Chunking):** Văn bản sau khi làm sạch được chia nhỏ bằng `RecursiveCharacterTextSplitter` với kích thước ~900 ký tự và độ gối đầu (overlap) 150 ký tự, đảm bảo tính liên kết thông tin giữa các đoạn
+- **Phân đoạn (Chunking):** Văn bản sau khi làm sạch được chia nhỏ bằng `RecursiveCharacterTextSplitter` với kích thước ~900 ký tự và độ gối đầu (overlap) 150 ký tự, đảm bảo tính liên kết thông tin giữa các đoạn
 - Tuy vậy việc xử lý multimodal PDF tốn nhiều tài nguyên và thời gian hơn so với việc xử lý PDF chỉ chứa văn bản, nên chúng tôi có tạo thêm 1 pipeline xử lý PDF chỉ chứa văn bản để rút ngắn thời gian xử lý của hệ thống khi chỉ muốn kiểm thử hoặc khi không có nhu cầu xử lý hình ảnh trong tài liệu
 
 ### 2. Pipeline Tóm tắt Blog Công nghệ
-Hệ thống giúp lập trình viên cập nhật kiến thức liên tục thông qua luồng tự động:
-- **Cào dữ liệu (Crawling):** Một robot crawler chạy định kỳ để lấy thông tin từ các RSS Feed của các cộng đồng lớn như Reddit (r/programming), Dev.to và Github Trending
-- **Tóm tắt bằng AI:** Thay vì đọc toàn bộ bài báo dài, hệ thống sử dụng **Groq (Llama-3.3)** hoặc **Local Mistral** để cô đọng nội dung thành 5-6 ý cốt lõi (Key Takeaways). Các bản tóm tắt này giúp tiết kiệm thời gian mà vẫn đảm bảo nắm bắt được xu hướng công nghệ mới nhất
+Hệ thống giúp người dùng cập nhật kiến thức liên tục thông qua luồng tự động:
+- **Cào dữ liệu:** Một robot crawler chạy định kỳ để lấy thông tin từ các RSS Feed của các cộng đồng lớn như Reddit (r/programming), Dev.to và Github Trending
+- **Tóm tắt bằng AI:** Thay vì đọc toàn bộ bài báo, hệ thống sử dụng **Groq (Llama-3.3)** hoặc **Local Mistral** để cô đọng nội dung thành 5-6 key takeaways. Các bản tóm tắt này giúp tiết kiệm thời gian mà vẫn đảm bảo nắm bắt được xu hướng công nghệ mới nhất
 
 ### 3. Xử lý Dữ liệu Lớn & Lưu trữ (Spark, Kafka & Iceberg)
 Hệ thống được thiết kế để có thể mở rộng theo mô hình Cloud-Native:
@@ -98,7 +98,7 @@ Hệ thống được thiết kế để có thể mở rộng theo mô hình Cl
 
 ## Hướng dẫn chạy tóm tắt
 
-> Để xem hướng dẫn siêu chi tiết (cài đặt từng dòng lệnh), hãy đọc file [`How-to-run.md`](How-to-run.md).
+> Để xem hướng dẫn chi tiết (từng dòng lệnh), hãy đọc file [`How-to-run.md`](How-to-run.md).
 
 ### Khởi động Hạ tầng
 
@@ -107,10 +107,9 @@ kubectl apply -f config/systems.yml
 ```
 
 ### Chạy các Pipeline Xử Lý
-```bash
 > Nạp dữ liệu PDF vào data/books trước khi chạy các lệnh xử lý tài liệu
-
-# Multimodal (dành cho các tài liệu chứa hình ảnh và biểu đồ) – mặc định
+```bash
+# Multimodal (xử lý cả hình ảnh và biểu đồ) – mặc định
 bash ./k8s/build.sh pipeline --source-dir data/books
 
 # Các tài liệu chỉ chứa plain text (nhanh hơn)
@@ -124,7 +123,6 @@ bash ./k8s/build.sh ui
 ```
 
 Mở Streamlit tại địa chỉ: **http://localhost:8501**
-Mở Grafana tại địa chỉ: **http://localhost:3000** (admin/admin)
 
 ### Gỡ Cài Đặt
 ```bash
@@ -132,4 +130,6 @@ minikube delete
 ```
 
 ---
-**Tác giả:** [Lê Thanh Bình], [Phạm Hồng Minh Tú], [Trần Hải Đăng] \\ Last modify: 03/05/2026
+Demo video link: https://youtu.be/ESuTjHjv7BQ  
+**Tác giả:** [Lê Thanh Bình], [Phạm Hồng Minh Tú], [Trần Hải Đăng]  
+Last modify: 04/05/2026
